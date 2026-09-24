@@ -420,7 +420,24 @@ fm_nm_run_is_executing() {  # <toon-output>
 # abbreviated commit identity must match the newest row. The branch's NEWEST
 # row alone decides; older rows are history and never answer for the present:
 #   - newest row's head resolves and matches the worktree (fm_nm_head_matches_worktree):
-#     its status word
+#     its status word. When optional $5 is exactly "1", this is relaxed by
+#     ONE further step: an older row whose head resolves to the EXACT SAME
+#     commit (not merely fm_nm_head_matches_worktree's looser ahead-of-worktree
+#     admission) and is live (status class "live" per fm_nm_run_status_class)
+#     while the decided row is terminal is preferred instead - a same-head
+#     relaunch is one run, not independent history, and a live row anywhere in
+#     that run should answer over a terminal one regardless of which side of
+#     an equal-minute ledger timestamp it sorted on. The scan keeps reading
+#     only while consecutive same-branch rows stay pinned to that exact
+#     commit; the first row at a different commit ends that group and stops
+#     the scan, so the newest-row-decides rule still governs real
+#     (different-head) history, including a genuinely newer run ahead of the
+#     worktree. $5 defaults to off: fm-crew-state.sh passes it only from the
+#     coarse fallback that has no other evidence for this branch's run, never
+#     from the sanity check that cross-reads the ledger against an
+#     already-trusted `axi status` answer for this same branch - there, a
+#     same-head status conflict must still read as unresolved rather than be
+#     silently resolved toward the live row.
 #   - newest row's head resolves but does not match: nothing (a newer run that
 #     is not this worktree's makes every older row stale history)
 #   - newest row's head does not resolve in this copy (the pipeline committed
@@ -441,10 +458,10 @@ fm_nm_run_is_executing() {  # <toon-output>
 # route (fm_nm_run_is_executing above), which the caller pairs with its own
 # liveness evidence.
 # Read-only: git reads resolve objects in place; custody never changes.
-fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [expected-head]
-  local wt=$1 branch=$2 list=$3 expected_head=${4:-}
+fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [expected-head] [prefer-live-at-same-head]
+  local wt=$1 branch=$2 list=$3 expected_head=${4:-} prefer_live=${5:-}
   local local_full row_full row st br sha day clock pr extra year_num month_num day_num max_day pending_st=''
-  local decided=''
+  local decided='' decided_row_full=''
   local_full=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 0
   [ -n "$list" ] || return 0
   while IFS= read -r row; do
@@ -496,8 +513,30 @@ fm_nm_runs_status_for_worktree() {  # <worktree> <branch> <runs-list-output> [ex
     fi
     row_full=$(fm_nm_resolve_commit "$wt" "$sha")
     if [ -n "$row_full" ]; then
-      if fm_nm_head_matches_worktree "$wt" "$sha"; then
+      if [ -z "$decided" ] && fm_nm_head_matches_worktree "$wt" "$sha"; then
         decided=$st
+        decided_row_full=$row_full
+        # Only the true no-other-evidence coarse fallback (prefer_live=1, set
+        # by its one caller in fm-crew-state.sh) keeps scanning past its
+        # newest matching row: every other caller, including the disagreement
+        # check against an already-trusted `axi status` answer, keeps the
+        # original strict newest-row-decides break so a coarse ledger
+        # conflict still reads as unresolved rather than silently picked.
+        [ "$prefer_live" = 1 ] && continue
+        break
+      fi
+      if [ "$prefer_live" = 1 ] && [ -n "$decided" ] && [ "$row_full" = "$decided_row_full" ]; then
+        # A second row pinned to the EXACT SAME resolved commit as the
+        # decided row is the same relaunch, not independent history: prefer
+        # its status when it is live and the decided row is terminal, since an
+        # equal-minute ledger tie gives no reliable newest-first order. Keep
+        # scanning while further rows stay pinned to this exact commit; the
+        # first row at a different commit ends the relaunch group below.
+        if [ "$(fm_nm_run_status_class "$decided")" = terminal ] \
+          && [ "$(fm_nm_run_status_class "$st")" != terminal ]; then
+          decided=$st
+        fi
+        continue
       fi
       break
     fi

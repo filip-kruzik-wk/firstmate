@@ -3502,6 +3502,37 @@ EOF
   pass "coarse scan anchors the unresolvable active row instead of falling to an older one"
 }
 
+# A relaunch on the SAME resolvable head: the ledger carries a terminal failed
+# row and a running row for this branch, both at exactly this worktree's HEAD,
+# with the terminal row sorted ahead of the running one (an equal-minute
+# ledger tie gives no reliable newest-first order). The running relaunch must
+# win over the stale failed row rather than the position in the listing
+# deciding it.
+test_coarse_same_head_prefers_running_row_over_terminal_row() {
+  reset_fakes
+  local d short; d=$(new_case f10-coarse-samehead)
+  make_repo_on_branch "$d/wt" fm/feat-f10samehead
+  short=$(git -C "$d/wt" rev-parse --short=8 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-f10samehead.meta" "window=fm:fm-feat-f10samehead" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-27 14:00
+  failed     fm/feat-f10samehead ${short}  2026-08-27 13:00
+  running    fm/feat-f10samehead ${short}  2026-08-27 13:00
+EOF
+)"
+  FM_FAKE_BUSY=1
+  local gen; gen=$("$ROOT/bin/fm-busy-event.sh" arm "$d/state" feat-f10samehead)
+  "$ROOT/bin/fm-busy-event.sh" apply "$d/state" feat-f10samehead busy --gen "$gen" \
+    --source claude-hook --event user-prompt-submit
+  local out; out=$(run_crew_state "$d" feat-f10samehead)
+  assert_not_contains "$out" "state: failed" "a same-head running relaunch must not read as the terminal failed row"
+  assert_contains "$out" "source: run-step" "the same-head running row still binds via the runs list"
+  assert_contains "$out" "state: working" "the same-head running relaunch reads working"
+  pass "coarse scan prefers a same-head running row over a terminal row sorted ahead of it"
+}
+
 # Coarse negative control: the anchor must end at EXACTLY this worktree's
 # head. The newest same-branch row is active at an unresolvable head, but the
 # row immediately before it sits at an OLDER local commit, so the ledger
@@ -5614,6 +5645,7 @@ test_local_advanced_past_run_head_invalidates
 test_pipeline_owned_active_run_beats_superseded_failed_row
 test_failed_run_with_no_later_run_still_surfaces
 test_coarse_unresolvable_active_row_never_falls_to_older_row
+test_coarse_same_head_prefers_running_row_over_terminal_row
 test_coarse_mismatched_anchor_falls_to_pane_not_older_row
 test_coarse_terminal_row_at_foreign_head_not_attributed
 test_executing_run_binds_without_pipeline_owned_sync

@@ -1025,7 +1025,11 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         # `[ -n "$RUN_OUT" ]`: an empty/timed-out primary call means the CLI
         # itself did not respond, so retrying it immediately with a second
         # bounded call would just double the wait for no better answer.
-        COARSE_STATUS=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
+        # prefer_live=1: this is the true coarse fallback with no other
+        # evidence for this branch's run, so a same-head relaunch's live row
+        # answers over a terminal row sorted ahead of it (bin/fm-nm-run-lib.sh
+        # fm_nm_runs_status_for_worktree owns the exact tiebreak).
+        COARSE_STATUS=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)" '' 1)
         if [ -n "$COARSE_STATUS" ]; then
           HAVE_RUN=1
           # A branch-matching answer the strict rule rejected is this branch's
