@@ -28,14 +28,15 @@
 #   2. the bounded repair instruction when supervision could not be established.
 #
 # SUPERVISION HOST. A home opted in with config/supervision-host
-# (docs/configuration.md "Supervision host" owns the opt-in) parks on
+# (docs/configuration.md "Supervision host" owns the gate;
+# config/supervision-host-off opts out, and a Cursor home without the file does not run the host) parks on
 # bin/fm-supervision-host.sh in the arm's place, which takes eligible attended
 # wakes and all away wakes itself and exits only when main is needed; its
 # header owns the output this park reads. A "supervision-host:" line is
 # actionable like a wake line, and the follow-up carries every such line in
 # order while wake lines keep the eight-line cap; "supervision-host stood
 # down:" ends the park silently; a host that died without a close is retried
-# instead of being judged by the healthy-watcher predicate. Without the file nothing below changes.
+# instead of being judged by the healthy-watcher predicate. On a home that does not run the host nothing below changes.
 #
 # LOOP BOUNDING IS DOUBLE, because either bound alone is insufficient:
 #   - `loop_limit` in .cursor/hooks.json is Cursor's own ceiling. Once
@@ -97,6 +98,8 @@ case "$LOCK_ATTEMPTS" in ''|*[!0-9]*|0) LOCK_ATTEMPTS=50 ;; esac
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-supervision-engine-lib.sh
+. "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-operational-input.sh
 . "$SCRIPT_DIR/fm-operational-input.sh"
 
@@ -254,24 +257,25 @@ park_still_ours() {
 current_session_still_ours() {
   local owner
   owner=$(cat "$STATE/.lock" 2>/dev/null) || return 1
-  case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+  fm_session_pid_valid "$owner" || return 1
   [ "$owner" = "$OWNER_ID" ] || return 1
   fm_session_lock_owned_by_self "$STATE"
 }
 
-# Only the lock-owning session may arm or wake. A prior session that died
-# leaving its numeric harness pid behind is the one recoverable
-# case, delegated to bin/fm-lock.sh so acquisition keeps its single owner.
+# Only the lock-owning session may arm or wake. The shared
+# fm_session_lock_pid_blocks_reclaim verdict decides whether a recorded owner may
+# be reclaimed, and any reclaim is delegated to bin/fm-lock.sh so acquisition
+# keeps its single owner.
 if ! fm_session_lock_owned_by_self "$STATE"; then
   LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
-  case "$LOCK_PID" in ''|*[!0-9]*) exit 0 ;; esac
-  fm_harness_pid_alive "$LOCK_PID" && exit 0
+  fm_session_pid_valid "$LOCK_PID" || exit 0
+  fm_session_lock_pid_blocks_reclaim "$LOCK_PID" && exit 0
   "$SCRIPT_DIR/fm-lock.sh" >/dev/null 2>&1 || exit 0
   fm_session_lock_owned_by_self "$STATE" || exit 0
 fi
 
 OWNER_ID=$(cat "$STATE/.lock" 2>/dev/null || true)
-case "$OWNER_ID" in ''|*[!0-9]*) exit 0 ;; esac
+fm_session_pid_valid "$OWNER_ID" || exit 0
 
 PARK_SEQ=
 claim_park || exit 0
@@ -310,7 +314,7 @@ STAND_DOWN=0
 HOST_MODE=0
 HOST_RC=0
 ACTIONABLE_RE='^(signal:|stale:|check:|heartbeat($|:))'
-if [ -f "$CONFIG/supervision-host" ]; then
+if fm_supervision_host_enabled "$CONFIG" cursor; then
   HOST_MODE=1
   ACTIONABLE_RE='^(signal:|stale:|check:|heartbeat($|:)|supervision-host:)'
 fi
